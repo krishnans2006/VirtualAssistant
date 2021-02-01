@@ -7,19 +7,16 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 import os
 import pytz
-import time
-import playsound
 from gtts import gTTS
 import pyttsx3
-import speech_recognition as sr
-import subprocess
+import pygame
+import requests
 
 WAKE = "assistant"
-SCOPES = ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/gmail']
+SCOPES = ['https://www.googleapis.com/auth/calendar']
 MONTHS = [datetime.date(2015, num, 1).strftime('%B').lower() for num in range(1, 13)]
 DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 DAY_EXTS = ["st", "nd", "rd", "th"]
-online = False
 
 
 def calendar_auth():
@@ -40,35 +37,16 @@ def calendar_auth():
     return service
 
 
-def gmail_auth():
-    creds = None
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
-
-    service = build('gmail', 'v1', credentials=creds)
-    return service
-
-
-def textify(time_limit=None):
-    r = sr.Recognizer()
-    with sr.Microphone() as source:
-        try:
-            r.adjust_for_ambient_noise(source)
-            print("Listening!")
-            voice = r.listen(source, time_limit)
-            return r.recognize_google(voice).lower()
-        except:
-            return None
+# def textify(time_limit=None):
+#     r = sr.Recognizer()
+#     with sr.Microphone() as source:
+#         try:
+#             r.adjust_for_ambient_noise(source)
+#             print("Listening!")
+#             voice = r.listen(source, time_limit)
+#             return r.recognize_google(voice).lower()
+#         except:
+#             return None
 
 
 def voiceify(text, filename="voice.mp3"):
@@ -76,37 +54,40 @@ def voiceify(text, filename="voice.mp3"):
     try:
         tts = gTTS(text, lang="en")
         tts.save(filename)
-        playsound.playsound(filename)
+        pygame.mixer.music.load(filename)
+        pygame.mixer.music.play()
+        while pygame.mixer.music.get_busy():
+            pygame.time.Clock().tick(10)
         os.remove(filename)
-        online = True
-    except:
+    except Exception as e:
+        print(e)
         tts = pyttsx3.init()
         tts.setProperty("rate", 150)
         tts.say(text)
         tts.runAndWait()
 
 
-def take_note(filename, text):
-    print(f"Using \"{filename}\" as the filename and \"{notetext}\" as the text...")
-    filename = "C:\\Users\\krish\\Desktop\\" + filename
-    with open(filename, "w") as note:
-        note.write(text)
-
-
 def get_events(service, date=datetime.datetime.today(), number_of_events=None):
     utc = pytz.UTC
-    min_time = datetime.datetime.combine(date, datetime.datetime.min.time()).astimezone(utc)
+    min_time = datetime.datetime.combine(date, datetime.datetime.now().timetz() if date == datetime.datetime.today() else datetime.datetime.min.time()).astimezone(utc)
     max_time = datetime.datetime.combine(date, datetime.datetime.max.time()).astimezone(utc)
-    if number_of_events is None:
-        events_result = service.events().list(calendarId="primary", timeMin=min_time.isoformat(),
-                                              timeMax=max_time.isoformat(), singleEvents=True,
-                                              orderBy="startTime").execute()
-    else:
-        events_result = service.events().list(calendarId="primary", timeMin=min_time.isoformat(),
-                                              timeMax=max_time.isoformat(), maxResults=number_of_events,
-                                              singleEvents=True, orderBy="startTime").execute()
+    calendar_list = service.calendarList().list(pageToken=None).execute()
+    print(len(calendar_list["items"]))
+    events = []
+    for calendar_list_entry in calendar_list['items']:
+        print(f"Going through calendar {calendar_list_entry['kind']}")
+        if number_of_events is None:
+            events_result = service.events().list(calendarId=calendar_list_entry["id"], timeMin=min_time.isoformat(),
+                                                  timeMax=max_time.isoformat(), singleEvents=True,
+                                                  orderBy="startTime").execute().get("items", [])
+            events.extend(events_result)
+        else:
+            events_result = service.events().list(calendarId=calendar_list_entry["id"], timeMin=min_time.isoformat(),
+                                                  timeMax=max_time.isoformat(), maxResults=number_of_events,
+                                                  singleEvents=True, orderBy="startTime").execute().get("items", [])
+            events.extend(events_result)
 
-    events = events_result.get("items", [])
+    print(events)
     if not events:
         summary = "No events found."
         print(summary)
@@ -114,29 +95,47 @@ def get_events(service, date=datetime.datetime.today(), number_of_events=None):
         return summary
     else:
         summary = f"You have {len(events)} events on {DAYS[date.weekday()].title()} {MONTHS[date.month - 1].title()} {date.day}, {str(date.year)[:2]}" if len(
-            events) > 1 else f"You have {len(events)} event on {DAYS[date.weekday()].title()} {MONTHS[date.month - 1].title()} {date.day}, {str(date.year)[:2]}"
+            events) > 1 else f"You have {len(events)} event on {DAYS[date.weekday()].title()} {MONTHS[date.month - 1].title()} {date.day}, {str(date.year)[:2]}. They are:"
         print(summary + f"{str(date.year)[2:]}")
         voiceify(summary + f"{str(date.year)[2:]}")
         for event in events:
             start = event["start"].get("dateTime", event["start"].get("date"))
-            start_time = str(start.split("T")[1].split("-")[0])
-            start_time_1 = int(start_time.split(":")[0])
-            start_time_2 = start_time.split(":")[1]
-            if int(start_time.split(":")[0]) < 12:
-                start_time_2 += " AM"
-            else:
-                start_time_2 += " PM"
-            start_time_1 = start_time_1 % 12
-            if start_time_1 == 0:
-                start_time_1 = 12
-            event_desc = "You have an event named " + event["summary"] + " at " + f"{start_time_1}:{start_time_2}"
+            try:
+                start_time = str(start.split("T")[1].split("-")[0])
+                start_time_1 = int(start_time.split(":")[0])
+                start_time_2 = start_time.split(":")[1]
+                if int(start_time.split(":")[0]) < 12:
+                    start_time_2 += " AM"
+                else:
+                    start_time_2 += " PM"
+                start_time_1 = start_time_1 % 12
+                if start_time_1 == 0:
+                    start_time_1 = 12
+                date_str = " at " + f"{start_time_1}:{start_time_2}"
+            except:
+                date_str = ""
+            if not event.get("summary"):
+                event["summary"] = "School"
+            event_desc = event["summary"] + date_str
             print(event_desc)
             voiceify(event_desc)
 
 
-def add_event(service, start, end, location=None):
-    pass
-
+def get_tasks():
+    tasks = requests.get("https://api.airtable.com/v0/appcwUadUy4RJCvnb/Tasks?api_key=keyfjHYaMusjF5sKG&filterByFormula=NOT(%7BStatus%7D+%3D+%27Done%27)&maxRecords=10&sort%5B0%5D%5Bfield%5D=Due&sort%5B0%5D%5Bdirection%5D=asc").json()
+    summary = f"Here are your next {5 if len(tasks['records']) > 5 else len(tasks['records'])} tasks"
+    print(summary)
+    voiceify(summary)
+    for task in tasks["records"]:
+        task = task["fields"]
+        due = task['Due'].split("T")
+        date = due[0]
+        time = due[1].split("Z")[0].split(".")[0] if len(due) > 0 else None
+        due_str = f"{datetime.datetime.strptime(date, '%Y-%m-%d').strftime('%A %B %d')}"
+        due_str += f"at {datetime.datetime.strptime(time, '%H:%M:%S').strftime('%I:%M %p')}" if time else ""
+        event_desc = f"{task['Name']}. Is {task['Status']}, and is due on {due_str}"
+        print(event_desc)
+        voiceify(event_desc)
 
 def get_date(text):
     today = datetime.date.today()
@@ -180,57 +179,30 @@ def get_date(text):
         if text.count("next") > 0: difference += 7
 
         return today + datetime.timedelta(difference)
-    if day is not None or month is not None or year is not None:
+    if day is not None or month is not None:
         return datetime.date(year, month, day)
-    else:
-        return datetime.datetime.today()
+    return datetime.datetime.today()
 
-
-while True:
-    text = textify()
-    try:
+if __name__ == "__main__":
+    pygame.mixer.init()
+    while True:
+        text = input("Text: ")
+        voiceify(text)
         if WAKE in text:
             print("Hello!")
             voiceify("Hello!")
-            if not online:
-                message = "You are offline! Goodbye!"
-                print(message)
-                voiceify(message)
-                quit()
-            text = textify()
+            text = input("Text: ")
             print(f"You said: {text.title()}")
             if "hello" in text or "hi" in text:
                 message = "Hello, Krishnan"
                 print(message)
                 voiceify(message)
-            if "search the web" in text:
-                subprocess.Popen(
-                    ["C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome", str(text[18:]) + " "])
-            elif "note" in text:
-                message = "Please say the file name, or the current date and time will be used by default."
-                print(message)
-                voiceify(message)
-                filename = textify(5)
-                if filename is None:
-                    filename = str(datetime.datetime.now())[:-7]
-                    filename = filename.replace(":", "-")
-                filename = filename.replace(" ", "_")
-                filename += ".txt"
-                message = "Please say the note you want to take."
-                print(message)
-                voiceify(message)
-                notetext = textify().title()
-                take_note(filename, notetext)
-                message = "I have saved the note. Here it is in Notepad."
-                print(message)
-                voiceify(message)
-                subprocess.Popen(["notepad.exe", "C:\\Users\\krish\\Desktop\\" + filename])
-            elif "ask calendar" in text:
+            elif "my events" in text:
                 service = calendar_auth()
                 get_events(service, get_date(text))
+            elif "my tasks" in text:
+                get_tasks()
             else:
                 message = "I couldn't recognize this!!"
                 print(message)
                 voiceify(message)
-    except:
-        pass
