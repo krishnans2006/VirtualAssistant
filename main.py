@@ -1,6 +1,7 @@
 from __future__ import print_function
 import datetime
 import pickle
+from dotenv import load_dotenv
 
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -11,6 +12,8 @@ from gtts import gTTS
 import pyttsx3
 import pygame
 import requests
+
+load_dotenv()
 
 WAKE = "assistant"
 SCOPES = ['https://www.googleapis.com/auth/calendar']
@@ -122,7 +125,7 @@ def get_events(service, date=datetime.datetime.today(), number_of_events=None):
 
 
 def get_tasks():
-    tasks = requests.get("https://api.airtable.com/v0/appcwUadUy4RJCvnb/Tasks?api_key=keyfjHYaMusjF5sKG&filterByFormula=NOT(%7BStatus%7D+%3D+%27Done%27)&maxRecords=10&sort%5B0%5D%5Bfield%5D=Due&sort%5B0%5D%5Bdirection%5D=asc").json()
+    tasks = requests.get(f"https://api.airtable.com/v0/{os.getenv('AIRTABLE_PROJECT')}/{os.getenv('AIRTABLE_TABLE')}?api_key={os.getenv('AIRTABLE_KEY')}&filterByFormula=NOT(%7BStatus%7D+%3D+%27Done%27)&maxRecords=10&sort%5B0%5D%5Bfield%5D=Due&sort%5B0%5D%5Bdirection%5D=asc").json()
     summary = f"Here are your next {5 if len(tasks['records']) > 5 else len(tasks['records'])} tasks"
     print(summary)
     voiceify(summary)
@@ -194,7 +197,7 @@ if __name__ == "__main__":
             text = input("Text: ")
             print(f"You said: {text.title()}")
             if "hello" in text or "hi" in text:
-                message = "Hello, Krishnan"
+                message = "Hello!"
                 print(message)
                 voiceify(message)
             elif "my events" in text:
